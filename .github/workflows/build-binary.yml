@@ -1,0 +1,52 @@
+name: Build Binary
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: colab-mcp
+            asset_name: colab-mcp-linux-amd64
+          - os: windows-latest
+            artifact_name: colab-mcp.exe
+            asset_name: colab-mcp-windows-amd64.exe
+          - os: macos-latest
+            artifact_name: colab-mcp
+            asset_name: colab-mcp-macos-amd64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13 
+
+      - name: Install dependencies and PyInstaller
+        run: |
+          uv sync --all-extras
+          uv pip install pyinstaller
+
+      - name: Build binary with PyInstaller
+        run: |
+          uv run pyinstaller --onefile --name ${{ matrix.artifact_name }} \
+            --hidden-import=uvicorn.logging \
+            --hidden-import=uvicorn.loops.auto \
+            --hidden-import=uvicorn.protocols.http.auto \
+            --collect-all fastmcp \
+            --collect-all mcp \
+            src/colab_mcp/__main__.py
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.artifact_name }}
