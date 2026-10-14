@@ -45,11 +45,29 @@ jobs:
           if __name__ == '__main__':
               main()
           EOF
+      
+      - name: Install UPX (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
 
+      - name: Install UPX (macOS)
+        if: runner.os == 'macOS'
+        run: brew install upx
+
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -L -o upx.zip https://github.com/upx/upx/releases/download/v5.2.1/upx-5.2.1-win64.zip
+          unzip upx.zip
+          echo "$PWD/upx-5.2.1-win64" >> $GITHUB_PATH
+      
       - name: Build binary with PyInstaller
         shell: bash
         run: |
-          uv run pyinstaller --onefile --name ${{ matrix.artifact_name }} \
+          uv run pyinstaller --onefile --strip \
+            --name ${{ matrix.artifact_name }} \
+            --upx-dir ${{ runner.os == 'Windows' && format('{0}/upx-5.2.1-win64', github.workspace) || '/usr/bin' }} \
             --paths src \
             --collect-submodules colab_mcp \
             --collect-all fastmcp \
