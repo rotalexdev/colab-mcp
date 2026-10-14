@@ -77,6 +77,9 @@ jobs:
             --collect-all mcp \
             --collect-all jupyter_kernel_client \
             --collect-all jupyter_client \
+            --collect-submodules lupa \
+            --hidden-import=lupa.lua51 \
+            --collect-all lupa \
             --collect-data certifi \
             --hidden-import=colab_mcp.session \
             --hidden-import=uvicorn.logging \
