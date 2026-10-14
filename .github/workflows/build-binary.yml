@@ -15,6 +15,9 @@ jobs:
           - os: ubuntu-latest
             artifact_name: colab-mcp
             asset_name: colab-mcp-linux-amd64
+          - os: ubuntu-24.04-arm
+            artifact_name: colab-mcp
+            asset_name: colab-mcp-linux-arm64
           - os: windows-latest
             artifact_name: colab-mcp.exe
             asset_name: colab-mcp-windows-amd64.exe
