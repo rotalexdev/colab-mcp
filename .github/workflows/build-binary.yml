@@ -2,12 +2,14 @@ name: Build Binary
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -28,25 +30,50 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Set up Python
-        run: uv python install 3.13 
+        run: uv python install 3.13
 
-      - name: Install dependencies and PyInstaller
+      - name: Install dependencies
         run: |
-          uv sync --all-extras
+          uv sync
           uv pip install pyinstaller
 
+      - name: Create launcher script
+        shell: bash
+        run: |
+          cat > launcher.py <<'EOF'
+          from colab_mcp import main
+          if __name__ == '__main__':
+              main()
+          EOF
+
       - name: Build binary with PyInstaller
+        shell: bash
         run: |
           uv run pyinstaller --onefile --name ${{ matrix.artifact_name }} \
-            --hidden-import=uvicorn.logging \
-            --hidden-import=uvicorn.loops.auto \
-            --hidden-import=uvicorn.protocols.http.auto \
+            --paths src \
+            --collect-submodules colab_mcp \
             --collect-all fastmcp \
             --collect-all mcp \
-            src/colab_mcp/__main__.py
+            --collect-all jupyter_kernel_client \
+            --collect-all jupyter_client \
+            --collect-data certifi \
+            --hidden-import=colab_mcp.session \
+            --hidden-import=uvicorn.logging \
+            --hidden-import=uvicorn.loops.auto \
+            --hidden-import=uvicorn.loops.asyncio \
+            --hidden-import=uvicorn.protocols.http.auto \
+            --hidden-import=uvicorn.protocols.http.h11_impl \
+            --hidden-import=uvicorn.protocols.websockets.auto \
+            --hidden-import=uvicorn.protocols.websockets.websockets_impl \
+            --hidden-import=uvicorn.lifespan.on \
+            --hidden-import=anyio._backends._asyncio \
+            --hidden-import=websockets.legacy \
+            --hidden-import=websockets.legacy.client \
+            launcher.py
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: dist/${{ matrix.artifact_name }}
+          if-no-files-found: error
