@@ -92,6 +92,17 @@ def tail(text, limit=TAIL_LINES):
     return prefix + "\n".join(kept)
 
 
+def read_stderr_log(handle):
+    """Flush, rewind and read back the stderr capture file.
+
+    Must always be called while the handle is still open: reading a closed file
+    raises ValueError and would destroy the diagnostic we are trying to report.
+    """
+    handle.flush()
+    handle.seek(0)
+    return handle.read()
+
+
 def child_env():
     """Environment for the child, forcing deterministic UTF-8 stdio."""
     env = os.environ.copy()
@@ -338,76 +349,83 @@ def check_mcp_handshake(binary):
         stderr_path = os.path.join(tmp, "stderr.log")
         stderr_file = open(stderr_path, "w+", encoding="utf-8", errors="replace")
 
+        # stderr is a file rather than a pipe on purpose: a pipe has a finite
+        # buffer, so a large stderr burst would block the child forever while we
+        # are busy writing the handshake. The cost of that choice is that Windows
+        # locks any file with an open handle, so this handle must be released
+        # before TemporaryDirectory is cleaned up. Every read therefore happens
+        # before the close, and the finally below guarantees the close on every
+        # exit path: the early return, the normal path, and any exception.
         try:
-            proc = spawn(
-                binary,
-                ["--log", log_dir],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=stderr_file,
-            )
-        except OSError as exc:
-            stderr_file.seek(0)
-            return (
-                False,
-                f"could not start the binary: {exc}",
-                None,
-                "",
-                tail(stderr_file.read()),
-            )
-
-        out_queue = queue.Queue()
-        reader = threading.Thread(
-            target=read_stdout,
-            args=(proc.stdout, out_queue),
-            daemon=True,
-        )
-        reader.start()
-
-        write_error = None
-        try:
-            for message in (INITIALIZE_MSG, INITIALIZED_MSG, TOOLS_LIST_MSG):
-                proc.stdin.write(json.dumps(message) + "\n")
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError, ValueError) as exc:
-            write_error = str(exc)
-
-        deadline = time.monotonic() + HANDSHAKE_TIMEOUT
-        if write_error:
-            responses, stop_reason = {}, "write_failed"
-        else:
-            responses, stop_reason = collect_responses(
-                proc, out_queue, deadline, seen_lines, tracebacks
-            )
-
-        # Always clean up before inspecting anything. Closing stdin is the
-        # documented shutdown signal for an MCP stdio server, so give it a
-        # short grace period to exit on its own before escalating to signals.
-        try:
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
-        except OSError:
-            pass
-        try:
-            proc.wait(timeout=SHUTDOWN_GRACE)
-        except subprocess.TimeoutExpired:
-            pass
-        terminate_tree(proc)
-
-        # Only close stdout once the reader thread is done with it. If some
-        # process still held the write end, close() would block forever on the
-        # read lock the thread is holding.
-        reader.join(timeout=SHUTDOWN_GRACE)
-        if not reader.is_alive():
             try:
-                if proc.stdout and not proc.stdout.closed:
-                    proc.stdout.close()
+                proc = spawn(
+                    binary,
+                    ["--log", log_dir],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                )
+            except OSError as exc:
+                return (
+                    False,
+                    f"could not start the binary: {exc}",
+                    None,
+                    "",
+                    tail(read_stderr_log(stderr_file)),
+                )
+
+            out_queue = queue.Queue()
+            reader = threading.Thread(
+                target=read_stdout,
+                args=(proc.stdout, out_queue),
+                daemon=True,
+            )
+            reader.start()
+
+            write_error = None
+            try:
+                for message in (INITIALIZE_MSG, INITIALIZED_MSG, TOOLS_LIST_MSG):
+                    proc.stdin.write(json.dumps(message) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError) as exc:
+                write_error = str(exc)
+
+            deadline = time.monotonic() + HANDSHAKE_TIMEOUT
+            if write_error:
+                responses, stop_reason = {}, "write_failed"
+            else:
+                responses, stop_reason = collect_responses(
+                    proc, out_queue, deadline, seen_lines, tracebacks
+                )
+
+            # Always clean up before inspecting anything. Closing stdin is the
+            # documented shutdown signal for an MCP stdio server, so give it a
+            # short grace period to exit on its own before escalating to signals.
+            try:
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.close()
             except OSError:
                 pass
+            try:
+                proc.wait(timeout=SHUTDOWN_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+            terminate_tree(proc)
 
-        stderr_file.flush()
-        stderr_file.seek(0)
-        stderr_text = stderr_file.read()
+            # Only close stdout once the reader thread is done with it. If some
+            # process still held the write end, close() would block forever on the
+            # read lock the thread is holding.
+            reader.join(timeout=SHUTDOWN_GRACE)
+            if not reader.is_alive():
+                try:
+                    if proc.stdout and not proc.stdout.closed:
+                        proc.stdout.close()
+                except OSError:
+                    pass
+
+            stderr_text = read_stderr_log(stderr_file)
+        finally:
+            stderr_file.close()
 
     exit_code = None if proc is None else proc.returncode
     stdout_tail = tail("\n".join(seen_lines))

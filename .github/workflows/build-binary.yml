@@ -57,6 +57,10 @@ jobs:
             --paths src \
             --collect-submodules colab_mcp \
             --collect-all fastmcp \
+            --collect-all docket \
+            --collect-all fakeredis \
+            --collect-all key_value \
+            --collect-all redis \
             --collect-all mcp \
             --collect-all jupyter_kernel_client \
             --collect-all jupyter_client \
